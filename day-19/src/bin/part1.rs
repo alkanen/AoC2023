@@ -19,7 +19,7 @@ use nom::{
         // separated_list1,
     },
 };
-
+use std::collections::HashMap;
 
 fn main() {
     let input = include_str!("../../input.txt");
@@ -27,8 +27,17 @@ fn main() {
     dbg!(output);
 }
 
-fn part1(_input: &str) -> String {
-    return "todo!".to_string();
+fn part1(input: &str) -> String {
+    let mut sum = 0;
+    
+    let (_, (workflows, ratings)) = parse(input).unwrap();
+
+    for rating in ratings {
+        if apply_workflows(&workflows, &rating) {
+            sum += rating.x + rating.m + rating.a + rating.s;
+        }
+    }
+    return sum.to_string();
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -72,9 +81,7 @@ struct Rating {
 use nom::character::complete;
 
 fn parse_rule(input: &str) -> IResult<&str, Rule> {
-    println!("parse_rule: '{}'", input);
     let (input, name) = alpha1(input)?;
-    println!("  name: {}", name);
     let (input, operator) = alt((
         map(complete::char('>'), |_| Operator::GreaterThan),
         map(complete::char('<'), |_| Operator::LessThan),
@@ -94,46 +101,33 @@ fn parse_rule(input: &str) -> IResult<&str, Rule> {
 }
 
 fn parse_rules(input: &str) -> IResult<&str, Vec<Rule>> {
-    // TODO: Replace this with a simple `rules_vec = input.split(",").collect()``
-    // and parse them each individually, making sure to treat the last one differently
     
-    let mut rules_list = input.split(",").collect::<Vec<&str>>();
-    println!("rules_list: {:?}", rules_list);
-
-    println!("Fallback input: '{}'", rules_list.last().unwrap());
-    // Pop the last element from the vector into a fallback
-    let (_, mut fallback) = terminated(
-        alpha1,
+    let (input, rules_list) = terminated(
+        separated_list0(
+            nom::bytes::complete::tag(","),
+            alt((
+                parse_rule,
+                map(
+                    alpha1,
+                    |fallback| {
+                        Rule {
+                            name: "fallback",
+                            operator: Operator::EqualTo,
+                            value: 0,
+                            next: fallback,
+                        }
+                    }
+                )
+            ))
+        ),
         nom::bytes::complete::tag("}")
-    )(rules_list.pop().unwrap())?;
+    )(input)?;
 
-    let mut rules_list = rules_list.iter().map(|rule| {
-        let (_input, rule) = parse_rule(rule).unwrap();
-        return rule;
-    }).collect::<Vec<Rule>>();
-    
-
-    // Remove trailing '}' on fallback if necessary
-    if fallback.ends_with("}") {
-        fallback = &fallback[..fallback.len()-1];
-    }
-
-    rules_list.push(
-        Rule {
-            name: "fallback",
-            operator: Operator::EqualTo,
-            value: 0,
-            next: fallback,
-        }
-    );
-
-    println!("Returning rules_list: {:?}", rules_list);
     Ok(("}", rules_list))
 }
 
 fn parse_workflow(input: &str) -> IResult<&str, Workflow> {
     let (input, name) = alpha1(input)?;
-    println!("name: {}, remains: '{}'", name, input);
     let (input, rules_list) = delimited(
         nom::bytes::complete::tag("{"),
         parse_rules,
@@ -174,11 +168,11 @@ fn parse_rating(input: &str) -> IResult<&str, Rating> {
     return Ok((input, rating));
 }
 
-fn parse(input: &str) -> IResult<&str, (Vec<Workflow>, Vec<Rating>)> {
+fn parse(input: &str) -> IResult<&str, (HashMap<&str, Workflow>, Vec<Rating>)> {
     // First parse multiple lines of Workflows, then
     // a single empty line followed by multiple lines of Ratings
 
-    let mut workflows: Vec<Workflow> = Vec::new();
+    let mut workflows: HashMap<&str, Workflow> = HashMap::new();
     let mut ratings: Vec<Rating> = Vec::new();
 
     let mut workflows_done = false;
@@ -194,11 +188,73 @@ fn parse(input: &str) -> IResult<&str, (Vec<Workflow>, Vec<Rating>)> {
             continue;
         } else {
             let (_, workflow) = parse_workflow(line)?;
-            workflows.push(workflow);
+            //workflows.push(workflow);
+            workflows.insert(workflow.name, workflow);
         }
     }
 
     return Ok((input, (workflows, ratings)));
+}
+
+fn apply_workflows(workflows: &HashMap<&str, Workflow>, rating: &Rating) -> bool {
+    println!("apply_workflows(..., {:?})", rating);
+
+    let mut current_workflow: &Workflow = &workflows["in"];
+
+    let mut max_ctr = 100;
+
+    loop {
+        max_ctr -= 1;
+        if max_ctr == 0 {
+            panic!("max_ctr reached!");
+        }
+
+        println!("current_workflow: {}", current_workflow.name);
+        for rule in current_workflow.rules.iter() {
+            println!("  rule: {:?}", rule);
+            if rule.name == "fallback" {
+                println!("    FALLBACK! to {}", rule.next);
+                if rule.next == "R" {
+                    return false;
+                } else if rule.next == "A" {
+                    return true;
+                } else {
+                    current_workflow = &workflows[rule.next];
+                }
+                break;
+            }
+
+            let value = match rule.name {
+                "x" => rating.x,
+                "m" => rating.m,
+                "a" => rating.a,
+                "s" => rating.s,
+                _ => panic!("Unknown rule name: {}", rule.name),
+            };
+
+            let mut accepted = false;
+
+            if rule.operator == Operator::GreaterThan && value > rule.value {
+                println!("{} > {}", value, rule.value);
+                accepted = true;
+            } else if rule.operator == Operator::LessThan && value < rule.value {
+                println!("{} < {}", value, rule.value);
+                accepted = true;
+            }
+
+            if accepted {
+                println!("    ACCEPTED! to {}", rule.next);
+                if rule.next == "R" {
+                    return false;
+                } else if rule.next == "A" {
+                    return true;
+                } else {
+                    current_workflow = &workflows[rule.next];
+                }
+                break;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -253,26 +309,98 @@ hdj{m>838:A,pv}
         assert_eq!(workflows.len(), 11);
         assert_eq!(ratings.len(), 5);
 
-        // "px{a<2006:qkq,m>2090:A,rfg}"
-        assert_eq!(workflows[0].name, "px");
-        assert_eq!(workflows[0].rules.len(), 3);
-        assert_eq!(workflows[0].rules[0].name, "a");
-        assert_eq!(workflows[0].rules[0].operator, Operator::LessThan);
-        assert_eq!(workflows[0].rules[0].value, 2006);
-        assert_eq!(workflows[0].rules[0].next, "qkq");
-        assert_eq!(workflows[0].rules[1].name, "m");
-        assert_eq!(workflows[0].rules[1].operator, Operator::GreaterThan);
-        assert_eq!(workflows[0].rules[1].value, 2090);
-        assert_eq!(workflows[0].rules[1].next, "A");
-        assert_eq!(workflows[0].rules[2].name, "fallback");
-        assert_eq!(workflows[0].rules[2].operator, Operator::EqualTo);
-        assert_eq!(workflows[0].rules[2].value, 0);
-        assert_eq!(workflows[0].rules[2].next, "rfg");
+        // 0 -> "px{a<2006:qkq,m>2090:A,rfg}"
+        assert_eq!(workflows["px"].name, "px");
+        assert_eq!(workflows["px"].rules.len(), 3);
+        assert_eq!(workflows["px"].rules[0].name, "a");
+        assert_eq!(workflows["px"].rules[0].operator, Operator::LessThan);
+        assert_eq!(workflows["px"].rules[0].value, 2006);
+        assert_eq!(workflows["px"].rules[0].next, "qkq");
+        assert_eq!(workflows["px"].rules[1].name, "m");
+        assert_eq!(workflows["px"].rules[1].operator, Operator::GreaterThan);
+        assert_eq!(workflows["px"].rules[1].value, 2090);
+        assert_eq!(workflows["px"].rules[1].next, "A");
+        assert_eq!(workflows["px"].rules[2].name, "fallback");
+        assert_eq!(workflows["px"].rules[2].operator, Operator::EqualTo);
+        assert_eq!(workflows["px"].rules[2].value, 0);
+        assert_eq!(workflows["px"].rules[2].next, "rfg");
+
+        // 10 -> "hdj{m>838:A,pv}"
+        assert_eq!(workflows["hdj"].name, "hdj");
+        assert_eq!(workflows["hdj"].rules.len(), 2);
+        assert_eq!(workflows["hdj"].rules[0].name, "m");
+        assert_eq!(workflows["hdj"].rules[0].operator, Operator::GreaterThan);
+        assert_eq!(workflows["hdj"].rules[0].value, 838);
+        assert_eq!(workflows["hdj"].rules[0].next, "A");
+        assert_eq!(workflows["hdj"].rules[1].name, "fallback");
+        assert_eq!(workflows["hdj"].rules[1].operator, Operator::EqualTo);
+        assert_eq!(workflows["hdj"].rules[1].value, 0);
+        assert_eq!(workflows["hdj"].rules[1].next, "pv");
+
+        // 4 -> {x=2127,m=1623,a=2188,s=1013}
+        assert_eq!(ratings[4].x, 2127);
+        assert_eq!(ratings[4].m, 1623);
+        assert_eq!(ratings[4].a, 2188);
+        assert_eq!(ratings[4].s, 1013);
+    }
+
+    fn test_parse_setup() -> (HashMap<&'static str, Workflow<'static>>, Vec<Rating>) {
+        let result = parse(INPUT);
+        assert!(result.is_ok());
+        let (_, (workflows, ratings)) = result.unwrap();
+        assert_eq!(workflows.len(), 11);
+        assert_eq!(ratings.len(), 5);
+
+        return (workflows, ratings);
+    }
+
+    #[test]
+    fn test_apply_workflows_rat0() {
+        let (workflows, ratings) = test_parse_setup();
+        assert_eq!(apply_workflows(&workflows, &ratings[0]), true);
+    }
+
+    #[test]
+    fn test_apply_workflows_rat1() {
+        let (workflows, ratings) = test_parse_setup();
+        assert_eq!(apply_workflows(&workflows, &ratings[1]), false);
+    }
+
+    #[test]
+    fn test_apply_workflows_rat2() {
+        let (workflows, ratings) = test_parse_setup();
+        assert_eq!(apply_workflows(&workflows, &ratings[2]), true);
+    }
+
+    #[test]
+    fn test_apply_workflows_rat3() {
+        let (workflows, ratings) = test_parse_setup();
+        assert_eq!(apply_workflows(&workflows, &ratings[3]), false);
+    }
+
+    #[test]
+    fn test_apply_workflows_rat4() {
+        let (workflows, ratings) = test_parse_setup();
+        assert_eq!(apply_workflows(&workflows, &ratings[4]), true);
+    }
+
+    #[test]
+    fn test_calculate_sum() {
+        let mut sum = 0;
+        let (workflows, ratings) = test_parse_setup();
+
+        for rating in ratings {
+            if apply_workflows(&workflows, &rating) {
+                sum += rating.x + rating.m + rating.a + rating.s;
+            }
+        }
+
+        assert_eq!(sum, 19114);
     }
 
     #[test]
     fn it_works1() {
         let result = part1(INPUT);
-        assert_eq!(result, "todo!".to_string());
+        assert_eq!(result, "19114".to_string());
     }
 }
